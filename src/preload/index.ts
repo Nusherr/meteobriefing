@@ -47,13 +47,15 @@ const electronAPI = {
   },
 
   updater: {
-    onStatus: (callback: (data: { status: string; version?: string; percent?: number }) => void) => {
-      const handler = (_: Electron.IpcRendererEvent, data: { status: string; version?: string; percent?: number }) =>
+    onStatus: (callback: (data: { status: string; version?: string; percent?: number; message?: string }) => void) => {
+      const handler = (_: Electron.IpcRendererEvent, data: { status: string; version?: string; percent?: number; message?: string }) =>
         callback(data)
       ipcRenderer.on('updater:status', handler)
       return () => ipcRenderer.removeListener('updater:status', handler)
     },
-    install: () => ipcRenderer.invoke('updater:install')
+    install: () => ipcRenderer.invoke('updater:install'),
+    checkForUpdates: () => ipcRenderer.invoke('updater:check') as Promise<{ status: string; message?: string }>,
+    getVersion: () => ipcRenderer.invoke('updater:get-version') as Promise<string>
   },
 
   pptx: {

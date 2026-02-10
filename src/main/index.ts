@@ -124,8 +124,19 @@ function setupAutoUpdater(): void {
     })
   })
 
+  autoUpdater.on('update-not-available', () => {
+    console.log('[Updater] No update available')
+    mainWindow?.webContents.send('updater:status', {
+      status: 'up-to-date'
+    })
+  })
+
   autoUpdater.on('error', (err) => {
     console.error('[Updater] Error:', err.message)
+    mainWindow?.webContents.send('updater:status', {
+      status: 'error',
+      message: err.message
+    })
   })
 
   // Check for updates 3 seconds after launch, then every 30 minutes
@@ -136,4 +147,24 @@ function setupAutoUpdater(): void {
 // IPC: user clicks "install and restart"
 ipcMain.handle('updater:install', () => {
   autoUpdater.quitAndInstall()
+})
+
+// IPC: manually check for updates
+ipcMain.handle('updater:check', async () => {
+  if (is.dev) return { status: 'dev' }
+  try {
+    const result = await autoUpdater.checkForUpdates()
+    if (!result || !result.updateInfo) {
+      return { status: 'up-to-date' }
+    }
+    return { status: 'checking' }
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : 'Unknown error'
+    return { status: 'error', message }
+  }
+})
+
+// IPC: get current app version
+ipcMain.handle('updater:get-version', () => {
+  return app.getVersion()
 })

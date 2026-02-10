@@ -3,6 +3,13 @@ import { useAuthStore } from '../../stores/auth.store'
 import { useTemplateStore } from '../../stores/template.store'
 import { TemplateSelector } from './TemplateSelector'
 
+interface UpdateStatus {
+  status: 'available' | 'downloading' | 'ready' | 'up-to-date' | 'error' | 'checking'
+  version?: string
+  percent?: number
+  message?: string
+}
+
 /**
  * NATO / Military time zones (A–Z, skipping J).
  * Each entry: letter, name, UTC offset in hours.
@@ -181,6 +188,120 @@ function ClocksRow() {
   )
 }
 
+function VersionBadge() {
+  const [appVersion, setAppVersion] = useState<string>('')
+  const [update, setUpdate] = useState<UpdateStatus | null>(null)
+  const [checking, setChecking] = useState(false)
+  const upToDateTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  useEffect(() => {
+    window.electronAPI.updater.getVersion().then(setAppVersion)
+  }, [])
+
+  useEffect(() => {
+    const unsub = window.electronAPI.updater.onStatus((data) => {
+      setChecking(false)
+      setUpdate(data as UpdateStatus)
+
+      // Auto-hide "up-to-date" after 4 seconds
+      if (data.status === 'up-to-date' || data.status === 'error') {
+        if (upToDateTimerRef.current) clearTimeout(upToDateTimerRef.current)
+        upToDateTimerRef.current = setTimeout(() => setUpdate(null), 4000)
+      }
+    })
+    return () => {
+      unsub()
+      if (upToDateTimerRef.current) clearTimeout(upToDateTimerRef.current)
+    }
+  }, [])
+
+  const handleCheck = useCallback(async () => {
+    setChecking(true)
+    setUpdate(null)
+    try {
+      await window.electronAPI.updater.checkForUpdates()
+    } catch {
+      setChecking(false)
+    }
+  }, [])
+
+  const handleInstall = useCallback(() => {
+    window.electronAPI.updater.install()
+  }, [])
+
+  return (
+    <div className="flex items-center gap-1.5">
+      {/* Version number */}
+      <span className="text-[10px] text-slate-400 font-mono">v{appVersion}</span>
+
+      {/* Status indicators */}
+      {update?.status === 'downloading' && (
+        <div className="flex items-center gap-1.5">
+          <div className="w-16 h-1.5 bg-slate-200 rounded-full overflow-hidden">
+            <div
+              className="h-full bg-blue-500 rounded-full transition-all duration-300"
+              style={{ width: `${update.percent || 0}%` }}
+            />
+          </div>
+          <span className="text-[10px] text-blue-500 font-mono">{update.percent || 0}%</span>
+        </div>
+      )}
+
+      {update?.status === 'available' && (
+        <span className="text-[10px] text-blue-500 font-medium">
+          v{update.version} disponibile...
+        </span>
+      )}
+
+      {update?.status === 'ready' && (
+        <button
+          onClick={handleInstall}
+          className="text-[10px] px-2 py-0.5 rounded-md bg-emerald-500 hover:bg-emerald-600 text-white font-medium transition-colors cursor-pointer"
+        >
+          Aggiorna v{update.version}
+        </button>
+      )}
+
+      {update?.status === 'up-to-date' && (
+        <span className="text-[10px] text-emerald-500 font-medium flex items-center gap-0.5">
+          <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
+            <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
+          </svg>
+          Aggiornato
+        </span>
+      )}
+
+      {update?.status === 'error' && (
+        <span className="text-[10px] text-red-400 font-medium">Errore</span>
+      )}
+
+      {/* Check for updates button */}
+      {!update?.status || update.status === 'up-to-date' || update.status === 'error' ? (
+        <button
+          onClick={handleCheck}
+          disabled={checking}
+          className="w-4 h-4 flex items-center justify-center text-slate-300 hover:text-blue-500 transition-colors cursor-pointer disabled:opacity-50"
+          title="Controlla aggiornamenti"
+        >
+          <svg
+            className={`w-3 h-3 ${checking ? 'animate-spin' : ''}`}
+            fill="none"
+            viewBox="0 0 24 24"
+            stroke="currentColor"
+            strokeWidth={2}
+          >
+            <path
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"
+            />
+          </svg>
+        </button>
+      ) : null}
+    </div>
+  )
+}
+
 export function TopBar() {
   const { isLoggedIn } = useAuthStore()
   const { activeTemplate, isDirty, saveActiveTemplate } = useTemplateStore()
@@ -196,8 +317,10 @@ export function TopBar() {
         <ClocksRow />
       </div>
 
-      {/* Right: Save button + Template selector */}
-      <div className="no-drag flex items-center gap-2">
+      {/* Right: Version + Save button + Template selector */}
+      <div className="no-drag flex items-center gap-3">
+        <VersionBadge />
+
         {/* Visible save button (always present when dirty) */}
         {activeTemplate && isDirty && (
           <button
