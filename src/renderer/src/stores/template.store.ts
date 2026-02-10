@@ -152,8 +152,13 @@ export const useTemplateStore = create<TemplateState>((set, get) => ({
 
   loadLastTemplate: async () => {
     const lastId = localStorage.getItem('meteobriefing:lastTemplateId')
-    if (lastId) {
+    if (!lastId) return
+    // If a template was already loaded/created before this async call resolves, skip
+    if (get().activeTemplate) return
+    try {
       await get().loadTemplate(lastId)
+    } catch (err) {
+      console.error('Failed to load last template:', err)
     }
   },
 

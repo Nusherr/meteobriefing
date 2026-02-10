@@ -4,8 +4,9 @@ import { useTemplateStore } from '../../stores/template.store'
 import { TemplateSelector } from './TemplateSelector'
 
 interface UpdateStatus {
-  status: 'available' | 'up-to-date' | 'error'
+  status: 'available' | 'downloading' | 'ready' | 'up-to-date' | 'error'
   version?: string
+  percent?: number
   message?: string
 }
 
@@ -191,7 +192,7 @@ function VersionBadge() {
   const [appVersion, setAppVersion] = useState<string>('')
   const [update, setUpdate] = useState<UpdateStatus | null>(null)
   const [checking, setChecking] = useState(false)
-  const upToDateTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const autoHideRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   useEffect(() => {
     window.electronAPI.updater.getVersion().then(setAppVersion)
@@ -202,63 +203,112 @@ function VersionBadge() {
       setChecking(false)
       setUpdate(data as UpdateStatus)
 
-      // Auto-hide "up-to-date" after 4 seconds
+      // Auto-hide transient statuses
       if (data.status === 'up-to-date' || data.status === 'error') {
-        if (upToDateTimerRef.current) clearTimeout(upToDateTimerRef.current)
-        upToDateTimerRef.current = setTimeout(() => setUpdate(null), 4000)
+        if (autoHideRef.current) clearTimeout(autoHideRef.current)
+        autoHideRef.current = setTimeout(() => setUpdate(null), 4000)
       }
     })
     return () => {
       unsub()
-      if (upToDateTimerRef.current) clearTimeout(upToDateTimerRef.current)
+      if (autoHideRef.current) clearTimeout(autoHideRef.current)
     }
   }, [])
 
+  // Check for updates
   const handleCheck = useCallback(async () => {
     setChecking(true)
     setUpdate(null)
     try {
       const result = await window.electronAPI.updater.checkForUpdates()
-      // In dev mode or if IPC returns immediate status, handle it here
       if (result?.status === 'dev') {
         setChecking(false)
         setUpdate({ status: 'up-to-date' })
-        // Auto-hide after 4s
-        if (upToDateTimerRef.current) clearTimeout(upToDateTimerRef.current)
-        upToDateTimerRef.current = setTimeout(() => setUpdate(null), 4000)
+        if (autoHideRef.current) clearTimeout(autoHideRef.current)
+        autoHideRef.current = setTimeout(() => setUpdate(null), 4000)
       }
-      // For 'checking' status, the updater events will update the UI
     } catch {
       setChecking(false)
       setUpdate({ status: 'error' })
-      if (upToDateTimerRef.current) clearTimeout(upToDateTimerRef.current)
-      upToDateTimerRef.current = setTimeout(() => setUpdate(null), 4000)
+      if (autoHideRef.current) clearTimeout(autoHideRef.current)
+      autoHideRef.current = setTimeout(() => setUpdate(null), 4000)
     }
   }, [])
 
-  const handleDownload = useCallback(() => {
-    window.electronAPI.updater.openDownload()
+  // Start downloading the update
+  const handleDownload = useCallback(async () => {
+    setUpdate((prev) => prev ? { ...prev, status: 'downloading', percent: 0 } : null)
+    try {
+      const result = await window.electronAPI.updater.downloadUpdate()
+      if (!result.ok) {
+        setUpdate({ status: 'error', message: result.error })
+        if (autoHideRef.current) clearTimeout(autoHideRef.current)
+        autoHideRef.current = setTimeout(() => setUpdate(null), 4000)
+      }
+      // If ok, the 'ready' status comes via onStatus event
+    } catch {
+      setUpdate({ status: 'error' })
+      if (autoHideRef.current) clearTimeout(autoHideRef.current)
+      autoHideRef.current = setTimeout(() => setUpdate(null), 4000)
+    }
   }, [])
+
+  // Open downloaded file
+  const handleOpenFile = useCallback(() => {
+    window.electronAPI.updater.openFile()
+  }, [])
+
+  // Determine which UI to show based on update status
+  const status = update?.status
 
   return (
     <div className="flex items-center gap-1.5">
-      {/* Version number */}
+      {/* Version */}
       <span className="text-[10px] text-slate-400 font-mono">v{appVersion}</span>
 
-      {/* Status indicators */}
-      {update?.status === 'available' && (
+      {/* New version available — download icon button */}
+      {status === 'available' && (
         <button
           onClick={handleDownload}
-          className="text-[10px] px-2 py-0.5 rounded-md bg-blue-500 hover:bg-blue-600 text-white font-medium transition-colors cursor-pointer flex items-center gap-1"
+          className="flex items-center gap-1 text-[10px] px-2 py-0.5 rounded-md bg-blue-500 hover:bg-blue-600 text-white font-medium transition-colors cursor-pointer"
+          title={`Scarica v${update?.version}`}
         >
           <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
             <path strokeLinecap="round" strokeLinejoin="round" d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5M16.5 12L12 16.5m0 0L7.5 12m4.5 4.5V3" />
           </svg>
-          v{update.version} disponibile
+          v{update?.version}
         </button>
       )}
 
-      {update?.status === 'up-to-date' && (
+      {/* Downloading with progress */}
+      {status === 'downloading' && (
+        <div className="flex items-center gap-1.5">
+          <div className="w-16 h-1.5 bg-slate-200 rounded-full overflow-hidden">
+            <div
+              className="h-full bg-blue-500 rounded-full transition-all duration-300"
+              style={{ width: `${update?.percent ?? 0}%` }}
+            />
+          </div>
+          <span className="text-[10px] text-blue-500 font-mono">{update?.percent ?? 0}%</span>
+        </div>
+      )}
+
+      {/* Download complete — open file */}
+      {status === 'ready' && (
+        <button
+          onClick={handleOpenFile}
+          className="flex items-center gap-1 text-[10px] px-2 py-0.5 rounded-md bg-emerald-500 hover:bg-emerald-600 text-white font-medium transition-colors cursor-pointer"
+          title="Apri il file di aggiornamento"
+        >
+          <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+            <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
+          </svg>
+          Installa v{update?.version}
+        </button>
+      )}
+
+      {/* Up to date */}
+      {status === 'up-to-date' && (
         <span className="text-[10px] text-emerald-500 font-medium flex items-center gap-0.5">
           <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
             <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
@@ -267,14 +317,15 @@ function VersionBadge() {
         </span>
       )}
 
-      {update?.status === 'error' && (
-        <span className="text-[10px] text-amber-500 font-medium" title={update.message || 'Errore sconosciuto'}>
+      {/* Error */}
+      {status === 'error' && (
+        <span className="text-[10px] text-amber-500 font-medium" title={update?.message || ''}>
           Verifica non disponibile
         </span>
       )}
 
-      {/* Check for updates button */}
-      {!update?.status || update.status === 'up-to-date' || update.status === 'error' ? (
+      {/* Refresh button — visible when idle, up-to-date, or error */}
+      {(!status || status === 'up-to-date' || status === 'error') && (
         <button
           onClick={handleCheck}
           disabled={checking}
@@ -295,7 +346,7 @@ function VersionBadge() {
             />
           </svg>
         </button>
-      ) : null}
+      )}
     </div>
   )
 }

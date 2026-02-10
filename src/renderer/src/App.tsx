@@ -2,9 +2,11 @@ import { useEffect } from 'react'
 import { useAuthStore } from './stores/auth.store'
 import { useUiStore } from './stores/ui.store'
 import { AppShell } from './components/layout/AppShell'
+import { ErrorBoundary } from './components/ErrorBoundary'
 import { ConnectionsPage } from './pages/ConnectionsPage'
 import { ProductBrowserPage } from './pages/ProductBrowserPage'
 import { BriefingEditorPage } from './pages/BriefingEditorPage'
+
 function PageRouter() {
   const { currentPage } = useUiStore()
 
@@ -28,8 +30,12 @@ export default function App() {
   }, [])
 
   return (
-    <AppShell>
-      <PageRouter />
-    </AppShell>
+    <ErrorBoundary>
+      <AppShell>
+        <ErrorBoundary>
+          <PageRouter />
+        </ErrorBoundary>
+      </AppShell>
+    </ErrorBoundary>
   )
 }

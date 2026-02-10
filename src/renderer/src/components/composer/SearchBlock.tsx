@@ -233,17 +233,26 @@ export function SearchBlock({
     if (!lockedProduct || lockedProduct.steps.length > 0 || autoFetchedRef.current) return
     autoFetchedRef.current = true
 
+    let cancelled = false
     ;(async () => {
       setIsLoadingSteps(true)
       try {
         const steps = await fetchStepsForProduct(lockedProduct)
-        applyFetchedSteps(lockedProduct, steps)
+        if (!cancelled) {
+          applyFetchedSteps(lockedProduct, steps)
+        }
       } catch (err) {
-        console.error(`[SearchBlock ${blockId}] Auto-refetch steps failed:`, err)
+        if (!cancelled) {
+          console.error(`[SearchBlock ${blockId}] Auto-refetch steps failed:`, err)
+        }
       } finally {
-        setIsLoadingSteps(false)
+        if (!cancelled) {
+          setIsLoadingSteps(false)
+        }
       }
     })()
+
+    return () => { cancelled = true }
   }, [lockedProduct]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // Manual reload steps for this search block

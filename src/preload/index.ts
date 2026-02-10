@@ -53,8 +53,9 @@ const electronAPI = {
       ipcRenderer.on('updater:status', handler)
       return () => ipcRenderer.removeListener('updater:status', handler)
     },
-    openDownload: () => ipcRenderer.invoke('updater:open-download'),
     checkForUpdates: () => ipcRenderer.invoke('updater:check') as Promise<{ status: string; message?: string }>,
+    downloadUpdate: () => ipcRenderer.invoke('updater:download') as Promise<{ ok: boolean; path?: string; error?: string }>,
+    openFile: () => ipcRenderer.invoke('updater:open-file'),
     getVersion: () => ipcRenderer.invoke('updater:get-version') as Promise<string>
   },
 

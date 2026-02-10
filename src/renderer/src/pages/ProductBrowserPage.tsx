@@ -61,7 +61,7 @@ export function ProductBrowserPage() {
       setGenPhase('downloading')
       setGenMessage('Download immagini...')
 
-      const freshSlides = slides
+      const freshSlides = slides ?? []
 
       const allCharts: { slideId: string; slotId: string; imageUrl: string; title: string }[] = []
       for (const slide of freshSlides) {
@@ -211,12 +211,16 @@ export function ProductBrowserPage() {
     )
   }
 
-  const totalCharts = slides.reduce((sum, s) => sum + s.charts.length, 0)
-  const staleCharts = slides.reduce((sum, s) => sum + s.charts.filter((c) => c.stale).length, 0)
-  const chartsWithoutUrl = slides.reduce((sum, s) => sum + s.charts.filter((c) => !c.imageUrl).length, 0)
+  // Guard against undefined/null arrays (can happen during first template hydration)
+  const safeSlides = slides ?? []
+  const safeSearchBlocks = searchBlocks ?? []
+
+  const totalCharts = safeSlides.reduce((sum, s) => sum + (s.charts?.length ?? 0), 0)
+  const staleCharts = safeSlides.reduce((sum, s) => sum + (s.charts?.filter((c) => c.stale).length ?? 0), 0)
+  const chartsWithoutUrl = safeSlides.reduce((sum, s) => sum + (s.charts?.filter((c) => !c.imageUrl).length ?? 0), 0)
 
   // Check if any search block with a locked product still has empty steps (not yet loaded)
-  const stepsStillLoading = searchBlocks.some(
+  const stepsStillLoading = safeSearchBlocks.some(
     (b) => b.lockedProduct && b.lockedProduct.steps.length === 0
   )
 
@@ -232,7 +236,7 @@ export function ProductBrowserPage() {
 
   // Collect all product IDs locked across search blocks (for duplicate prevention)
   const lockedProductIds = new Set(
-    searchBlocks
+    safeSearchBlocks
       .filter((b) => b.lockedProduct)
       .map((b) => b.lockedProduct!.productId)
   )
@@ -260,7 +264,7 @@ export function ProductBrowserPage() {
         {/* Left Panel: Stackable search blocks (takes all available space) */}
         <div className="flex-1 min-w-0 flex flex-col min-h-0">
           <div className="flex-1 overflow-y-auto space-y-3 pr-1" ref={searchBlocksContainerRef}>
-            {searchBlocks.map((block, index) => (
+            {safeSearchBlocks.map((block, index) => (
               <div
                 key={block.id}
                 data-searchblock
@@ -313,7 +317,7 @@ export function ProductBrowserPage() {
                     removeSearchBlock(block.id)
                     if (focusedBlockId === block.id) setFocusedBlockId(null)
                   }}
-                  canRemove={searchBlocks.length > 1}
+                  canRemove={safeSearchBlocks.length > 1}
                   isFocused={focusedBlockId === block.id}
                   onFocus={() => setFocusedBlockId(block.id)}
                   lockedProductIds={lockedProductIds}
