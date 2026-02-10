@@ -1,6 +1,6 @@
 {
   "name": "meteobriefing",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "description": "Automated weather briefing PowerPoint generator",
   "main": "./out/main/index.js",
   "author": "MeteoBriefing",

@@ -98,28 +98,15 @@ function setupAutoUpdater(): void {
   // Don't check for updates in dev mode
   if (is.dev) return
 
-  autoUpdater.autoDownload = true
-  autoUpdater.autoInstallOnAppQuit = true
+  // Don't auto-download: app is unsigned, so auto-install won't work on macOS.
+  // Instead, we notify the user and let them download manually from GitHub.
+  autoUpdater.autoDownload = false
+  autoUpdater.autoInstallOnAppQuit = false
 
   autoUpdater.on('update-available', (info) => {
     console.log('[Updater] Update available:', info.version)
     mainWindow?.webContents.send('updater:status', {
       status: 'available',
-      version: info.version
-    })
-  })
-
-  autoUpdater.on('download-progress', (progress) => {
-    mainWindow?.webContents.send('updater:status', {
-      status: 'downloading',
-      percent: Math.round(progress.percent)
-    })
-  })
-
-  autoUpdater.on('update-downloaded', (info) => {
-    console.log('[Updater] Update downloaded:', info.version)
-    mainWindow?.webContents.send('updater:status', {
-      status: 'ready',
       version: info.version
     })
   })
@@ -139,14 +126,14 @@ function setupAutoUpdater(): void {
     })
   })
 
-  // Check for updates 3 seconds after launch, then every 30 minutes
+  // Check for updates 3 seconds after launch, then every 60 minutes
   setTimeout(() => autoUpdater.checkForUpdates(), 3000)
-  setInterval(() => autoUpdater.checkForUpdates(), 30 * 60 * 1000)
+  setInterval(() => autoUpdater.checkForUpdates(), 60 * 60 * 1000)
 }
 
-// IPC: user clicks "install and restart"
-ipcMain.handle('updater:install', () => {
-  autoUpdater.quitAndInstall()
+// IPC: open GitHub releases page to download new version manually
+ipcMain.handle('updater:open-download', () => {
+  shell.openExternal('https://github.com/Nusherr/meteobriefing/releases/latest')
 })
 
 // IPC: manually check for updates

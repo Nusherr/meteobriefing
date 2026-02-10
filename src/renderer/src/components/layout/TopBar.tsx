@@ -4,9 +4,8 @@ import { useTemplateStore } from '../../stores/template.store'
 import { TemplateSelector } from './TemplateSelector'
 
 interface UpdateStatus {
-  status: 'available' | 'downloading' | 'ready' | 'up-to-date' | 'error' | 'checking'
+  status: 'available' | 'up-to-date' | 'error'
   version?: string
-  percent?: number
   message?: string
 }
 
@@ -219,14 +218,26 @@ function VersionBadge() {
     setChecking(true)
     setUpdate(null)
     try {
-      await window.electronAPI.updater.checkForUpdates()
+      const result = await window.electronAPI.updater.checkForUpdates()
+      // In dev mode or if IPC returns immediate status, handle it here
+      if (result?.status === 'dev') {
+        setChecking(false)
+        setUpdate({ status: 'up-to-date' })
+        // Auto-hide after 4s
+        if (upToDateTimerRef.current) clearTimeout(upToDateTimerRef.current)
+        upToDateTimerRef.current = setTimeout(() => setUpdate(null), 4000)
+      }
+      // For 'checking' status, the updater events will update the UI
     } catch {
       setChecking(false)
+      setUpdate({ status: 'error' })
+      if (upToDateTimerRef.current) clearTimeout(upToDateTimerRef.current)
+      upToDateTimerRef.current = setTimeout(() => setUpdate(null), 4000)
     }
   }, [])
 
-  const handleInstall = useCallback(() => {
-    window.electronAPI.updater.install()
+  const handleDownload = useCallback(() => {
+    window.electronAPI.updater.openDownload()
   }, [])
 
   return (
@@ -235,30 +246,15 @@ function VersionBadge() {
       <span className="text-[10px] text-slate-400 font-mono">v{appVersion}</span>
 
       {/* Status indicators */}
-      {update?.status === 'downloading' && (
-        <div className="flex items-center gap-1.5">
-          <div className="w-16 h-1.5 bg-slate-200 rounded-full overflow-hidden">
-            <div
-              className="h-full bg-blue-500 rounded-full transition-all duration-300"
-              style={{ width: `${update.percent || 0}%` }}
-            />
-          </div>
-          <span className="text-[10px] text-blue-500 font-mono">{update.percent || 0}%</span>
-        </div>
-      )}
-
       {update?.status === 'available' && (
-        <span className="text-[10px] text-blue-500 font-medium">
-          v{update.version} disponibile...
-        </span>
-      )}
-
-      {update?.status === 'ready' && (
         <button
-          onClick={handleInstall}
-          className="text-[10px] px-2 py-0.5 rounded-md bg-emerald-500 hover:bg-emerald-600 text-white font-medium transition-colors cursor-pointer"
+          onClick={handleDownload}
+          className="text-[10px] px-2 py-0.5 rounded-md bg-blue-500 hover:bg-blue-600 text-white font-medium transition-colors cursor-pointer flex items-center gap-1"
         >
-          Aggiorna v{update.version}
+          <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+            <path strokeLinecap="round" strokeLinejoin="round" d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5M16.5 12L12 16.5m0 0L7.5 12m4.5 4.5V3" />
+          </svg>
+          v{update.version} disponibile
         </button>
       )}
 
@@ -272,7 +268,9 @@ function VersionBadge() {
       )}
 
       {update?.status === 'error' && (
-        <span className="text-[10px] text-red-400 font-medium">Errore</span>
+        <span className="text-[10px] text-amber-500 font-medium" title={update.message || 'Errore sconosciuto'}>
+          Verifica non disponibile
+        </span>
       )}
 
       {/* Check for updates button */}
