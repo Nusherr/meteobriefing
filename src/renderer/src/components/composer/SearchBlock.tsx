@@ -13,6 +13,8 @@ interface SearchBlockProps {
   canRemove: boolean
   isFocused: boolean
   onFocus: () => void
+  /** Product IDs already locked in other search blocks (to prevent duplicates) */
+  lockedProductIds: Set<string>
 }
 
 const PRODUCT_TYPES = [
@@ -48,6 +50,7 @@ export function SearchBlock({
   onRemove,
   canRemove,
   isFocused,
+  lockedProductIds,
   onFocus
 }: SearchBlockProps) {
   const { selectedSlideId, slides, assignChartToSlide, setSearchBlockLock, refreshChartsForProduct } = useTemplateStore()
@@ -119,9 +122,13 @@ export function SearchBlock({
   }, [isFocused, lockedProduct?.steps.length]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // Fetch steps for a locked product (used by auto-refetch and manual reload)
+  // Validates that steps have distinct URLs and a reasonable count for multi-step products
   const fetchStepsForProduct = useCallback(
     async (product: LockedProductData): Promise<TimeStep[]> => {
-      const MAX_RETRIES = 3
+      const MAX_RETRIES = 5
+      // Multi-step product types typically have many time steps (20+)
+      const MIN_EXPECTED_STEPS = isSingleImage ? 1 : 5
+
       for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
         console.log(`[SearchBlock ${blockId}] Fetching steps, attempt ${attempt}/${MAX_RETRIES}`)
         const result = await window.electronAPI.prometeo.fetchCatalogAndChartUrls(
@@ -129,16 +136,48 @@ export function SearchBlock({
           product.productId
         )
         const steps = (result.chartUrls.steps || []) as TimeStep[]
-        if (steps.length > 0) return steps
-        if (attempt < MAX_RETRIES) {
-          console.warn(`[SearchBlock ${blockId}] Got 0 steps, retrying in 2s...`)
-          await new Promise((r) => setTimeout(r, 2000))
+
+        if (steps.length === 0) {
+          if (attempt < MAX_RETRIES) {
+            console.warn(`[SearchBlock ${blockId}] Got 0 steps, retrying in 8s...`)
+            await new Promise((r) => setTimeout(r, 8000))
+          }
+          continue
         }
+
+        // Validate: too few steps for a multi-step product = incomplete load
+        if (steps.length < MIN_EXPECTED_STEPS) {
+          console.warn(
+            `[SearchBlock ${blockId}] Only ${steps.length} steps (expected at least ${MIN_EXPECTED_STEPS}) — incomplete data, retrying in 8s...`
+          )
+          if (attempt < MAX_RETRIES) {
+            await new Promise((r) => setTimeout(r, 8000))
+            continue
+          }
+          // Last attempt: accept what we have
+          console.warn(`[SearchBlock ${blockId}] Last attempt — accepting ${steps.length} steps`)
+        }
+
+        // Validate: if multiple steps, they must have distinct URLs
+        if (steps.length > 1) {
+          const uniqueUrls = new Set(steps.map((s) => s.imageUrl))
+          if (uniqueUrls.size === 1) {
+            console.warn(
+              `[SearchBlock ${blockId}] All ${steps.length} steps have same URL — incomplete data, retrying in 8s...`
+            )
+            if (attempt < MAX_RETRIES) {
+              await new Promise((r) => setTimeout(r, 8000))
+              continue
+            }
+          }
+        }
+
+        return steps
       }
-      console.error(`[SearchBlock ${blockId}] All ${MAX_RETRIES} attempts returned 0 steps`)
+      console.error(`[SearchBlock ${blockId}] All ${MAX_RETRIES} attempts returned 0 or invalid steps`)
       return []
     },
-    [blockId, productType]
+    [blockId, productType, isSingleImage]
   )
 
   // Apply fetched steps to the store and update preview
@@ -147,6 +186,29 @@ export function SearchBlock({
       const stepData = isSingleImage
         ? steps.map((s) => ({ label: product.productName, index: s.index, imageUrl: s.imageUrl }))
         : steps.map((s) => ({ label: s.label, index: s.index, imageUrl: s.imageUrl }))
+
+      // Validate: check that steps have distinct URLs (if not, Prometeo likely returned incomplete data)
+      if (steps.length > 1) {
+        const uniqueUrls = new Set(stepData.map((s) => s.imageUrl))
+        if (uniqueUrls.size === 1) {
+          console.warn(
+            `[SearchBlock ${blockId}] All ${steps.length} steps have the same URL — Prometeo returned incomplete data, skipping refresh`
+          )
+          // Still update the search block steps (so the user can see/pick them)
+          // but do NOT refresh slide charts — they'd all become the same image
+          setSearchBlockLock(blockId, {
+            productId: product.productId,
+            productName: product.productName,
+            steps: stepData
+          })
+          return
+        }
+      }
+
+      console.log(
+        `[SearchBlock ${blockId}] Applying ${stepData.length} steps for ${product.productId}:`,
+        stepData.slice(0, 3).map((s) => `idx=${s.index} "${s.label}"`)
+      )
 
       setSearchBlockLock(blockId, {
         productId: product.productId,
@@ -188,6 +250,14 @@ export function SearchBlock({
   const reloadSteps = useCallback(async () => {
     if (!lockedProduct || isLoadingSteps) return
     setIsLoadingSteps(true)
+
+    // Clear steps immediately so the PPT button gets blocked during reload
+    setSearchBlockLock(blockId, {
+      productId: lockedProduct.productId,
+      productName: lockedProduct.productName,
+      steps: []
+    })
+
     try {
       const steps = await fetchStepsForProduct(lockedProduct)
       applyFetchedSteps(lockedProduct, steps)
@@ -196,7 +266,7 @@ export function SearchBlock({
     } finally {
       setIsLoadingSteps(false)
     }
-  }, [lockedProduct, isLoadingSteps, blockId, fetchStepsForProduct, applyFetchedSteps])
+  }, [lockedProduct, isLoadingSteps, blockId, fetchStepsForProduct, applyFetchedSteps, setSearchBlockLock])
 
   // Fetch catalog when productType changes
   const fetchCatalog = useCallback(async () => {
@@ -239,6 +309,11 @@ export function SearchBlock({
       setSearchBlockLock(blockId, null)
       setPreviewStepIndex(null)
       setPreviewDataUrl(null)
+      return
+    }
+
+    // Prevent selecting a product already locked in another search block
+    if (lockedProductIds.has(productId)) {
       return
     }
 
@@ -683,29 +758,40 @@ export function SearchBlock({
                   </p>
                 )}
 
-                {filteredProducts.slice(0, 100).map((p) => (
-                  <button
-                    key={p.id}
-                    onClick={() => selectProduct(p.id)}
-                    className="w-full text-left px-3 py-2 text-xs hover:bg-blue-50 transition-colors cursor-pointer flex items-center gap-1.5 border-b border-slate-50 last:border-b-0"
-                  >
-                    <svg
-                      className="w-3 h-3 text-slate-400 shrink-0"
-                      fill="none"
-                      viewBox="0 0 24 24"
-                      stroke="currentColor"
-                      strokeWidth={2}
+                {filteredProducts.slice(0, 100).map((p) => {
+                  const isAlreadyLocked = lockedProductIds.has(p.id)
+                  return (
+                    <button
+                      key={p.id}
+                      onClick={() => selectProduct(p.id)}
+                      disabled={isAlreadyLocked}
+                      className={`w-full text-left px-3 py-2 text-xs transition-colors flex items-center gap-1.5 border-b border-slate-50 last:border-b-0 ${
+                        isAlreadyLocked
+                          ? 'opacity-40 cursor-not-allowed'
+                          : 'hover:bg-blue-50 cursor-pointer'
+                      }`}
                     >
-                      <path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" />
-                    </svg>
-                    <span className="text-slate-700 truncate leading-tight">{p.name}</span>
-                    {p.category && (
-                      <span className="text-[9px] text-slate-400 shrink-0 ml-auto">
-                        {p.category}
-                      </span>
-                    )}
-                  </button>
-                ))}
+                      <svg
+                        className="w-3 h-3 text-slate-400 shrink-0"
+                        fill="none"
+                        viewBox="0 0 24 24"
+                        stroke="currentColor"
+                        strokeWidth={2}
+                      >
+                        <path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" />
+                      </svg>
+                      <span className={`truncate leading-tight ${isAlreadyLocked ? 'text-slate-400' : 'text-slate-700'}`}>{p.name}</span>
+                      {isAlreadyLocked && (
+                        <span className="text-[9px] text-slate-400 shrink-0 ml-auto">già in uso</span>
+                      )}
+                      {!isAlreadyLocked && p.category && (
+                        <span className="text-[9px] text-slate-400 shrink-0 ml-auto">
+                          {p.category}
+                        </span>
+                      )}
+                    </button>
+                  )
+                })}
 
                 {filteredProducts.length > 100 && (
                   <p className="p-2 text-[10px] text-slate-400 text-center">

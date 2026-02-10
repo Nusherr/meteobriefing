@@ -46,6 +46,16 @@ const electronAPI = {
     delete: (id: string) => ipcRenderer.invoke(IPC_CHANNELS.TEMPLATE_DELETE, id)
   },
 
+  updater: {
+    onStatus: (callback: (data: { status: string; version?: string; percent?: number }) => void) => {
+      const handler = (_: Electron.IpcRendererEvent, data: { status: string; version?: string; percent?: number }) =>
+        callback(data)
+      ipcRenderer.on('updater:status', handler)
+      return () => ipcRenderer.removeListener('updater:status', handler)
+    },
+    install: () => ipcRenderer.invoke('updater:install')
+  },
+
   pptx: {
     generate: (definition: unknown) => ipcRenderer.invoke(IPC_CHANNELS.PPTX_GENERATE, definition),
     selectSavePath: () => ipcRenderer.invoke(IPC_CHANNELS.APP_SELECT_SAVE_PATH),

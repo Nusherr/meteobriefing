@@ -1,6 +1,7 @@
-import { app, BrowserWindow, shell, nativeImage } from 'electron'
+import { app, BrowserWindow, shell, nativeImage, ipcMain } from 'electron'
 import { join } from 'path'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
+import { autoUpdater } from 'electron-updater'
 import { registerAuthIpc } from './ipc/auth.ipc'
 import { registerPrometeoIpc } from './ipc/prometeo.ipc'
 import { registerTemplateIpc } from './ipc/template.ipc'
@@ -50,6 +51,10 @@ function createWindow(): void {
     mainWindow?.show()
   })
 
+  mainWindow.on('closed', () => {
+    mainWindow = null
+  })
+
   mainWindow.webContents.setWindowOpenHandler((details) => {
     shell.openExternal(details.url)
     return { action: 'deny' }
@@ -77,12 +82,58 @@ app.whenReady().then(() => {
   registerPptxIpc()
 
   createWindow()
+  setupAutoUpdater()
 
   app.on('activate', () => {
-    if (BrowserWindow.getAllWindows().length === 0) createWindow()
+    if (!mainWindow) createWindow()
   })
 })
 
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit()
+})
+
+// ── Auto-updater ──
+function setupAutoUpdater(): void {
+  // Don't check for updates in dev mode
+  if (is.dev) return
+
+  autoUpdater.autoDownload = true
+  autoUpdater.autoInstallOnAppQuit = true
+
+  autoUpdater.on('update-available', (info) => {
+    console.log('[Updater] Update available:', info.version)
+    mainWindow?.webContents.send('updater:status', {
+      status: 'available',
+      version: info.version
+    })
+  })
+
+  autoUpdater.on('download-progress', (progress) => {
+    mainWindow?.webContents.send('updater:status', {
+      status: 'downloading',
+      percent: Math.round(progress.percent)
+    })
+  })
+
+  autoUpdater.on('update-downloaded', (info) => {
+    console.log('[Updater] Update downloaded:', info.version)
+    mainWindow?.webContents.send('updater:status', {
+      status: 'ready',
+      version: info.version
+    })
+  })
+
+  autoUpdater.on('error', (err) => {
+    console.error('[Updater] Error:', err.message)
+  })
+
+  // Check for updates 3 seconds after launch, then every 30 minutes
+  setTimeout(() => autoUpdater.checkForUpdates(), 3000)
+  setInterval(() => autoUpdater.checkForUpdates(), 30 * 60 * 1000)
+}
+
+// IPC: user clicks "install and restart"
+ipcMain.handle('updater:install', () => {
+  autoUpdater.quitAndInstall()
 })

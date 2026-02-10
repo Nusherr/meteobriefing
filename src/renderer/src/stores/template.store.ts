@@ -521,10 +521,25 @@ export const useTemplateStore = create<TemplateState>((set, get) => ({
   },
 
   removeSearchBlock: (blockId: string) => {
-    const { searchBlocks } = get()
+    const { searchBlocks, slides } = get()
     if (searchBlocks.length <= 1) return // Keep at least one
+
+    // Find the product locked in this search block
+    const block = searchBlocks.find((b) => b.id === blockId)
+    const lockedProductId = block?.lockedProduct?.productId
+
+    // Remove all charts from slides that belong to this product
+    let updatedSlides = slides
+    if (lockedProductId) {
+      updatedSlides = slides.map((slide) => ({
+        ...slide,
+        charts: slide.charts.filter((c) => c.productId !== lockedProductId)
+      }))
+    }
+
     set({
       searchBlocks: searchBlocks.filter((b) => b.id !== blockId),
+      slides: updatedSlides,
       isDirty: true
     })
   },
@@ -562,16 +577,34 @@ export const useTemplateStore = create<TemplateState>((set, get) => ({
     const { slides } = get()
     let changed = false
 
+    // Safety check: find the max stepIndex used in slides for this product
+    let maxUsedIndex = 0
+    for (const slide of slides) {
+      for (const chart of slide.charts) {
+        if (chart.productId === productId && chart.stepIndex > maxUsedIndex) {
+          maxUsedIndex = chart.stepIndex
+        }
+      }
+    }
+
+    // If we received fewer steps than the max used index, the data is likely incomplete.
+    // Don't update slides — it would remap everything to the wrong step.
+    if (newSteps.length > 0 && newSteps.length <= maxUsedIndex) {
+      console.warn(
+        `[TemplateStore] Refusing to refresh product ${productId}: received ${newSteps.length} steps but slides use up to index ${maxUsedIndex}. Data likely incomplete.`
+      )
+      return
+    }
+
     const updatedSlides = slides.map((slide) => ({
       ...slide,
       charts: slide.charts.map((chart) => {
         if (chart.productId !== productId) return chart
 
-        // Strategy 1 (primary): Match by stepIndex position.
+        // Match by stepIndex position.
         // This keeps the same relative position in the forecast grid,
         // so when the model run advances by one day, all slides shift forward automatically.
-        // e.g. index 0 = first step, index 4 = fifth step — regardless of the date label.
-        let matchedStep = newSteps.find((s) => s.index === chart.stepIndex)
+        const matchedStep = newSteps.find((s) => s.index === chart.stepIndex)
 
         if (matchedStep) {
           changed = true
@@ -589,27 +622,11 @@ export const useTemplateStore = create<TemplateState>((set, get) => ({
           }
         }
 
-        // Strategy 2 (fallback): If stepIndex is out of range (grid size changed),
-        // try to find the last available step as a reasonable fallback.
-        if (newSteps.length > 0) {
-          const lastStep = newSteps[newSteps.length - 1]
-          console.warn(
-            `[TemplateStore] Step idx=${chart.stepIndex} out of range (${newSteps.length} steps), using last step "${lastStep.label}"`
-          )
-          changed = true
-          return {
-            ...chart,
-            stepLabel: lastStep.label,
-            stepIndex: lastStep.index,
-            imageUrl: lastStep.imageUrl,
-            stale: false
-          }
-        }
-
-        // No steps at all — mark as stale
+        // stepIndex not found in new steps — mark as stale instead of remapping
+        // This preserves the original stepIndex so it can be resolved when full data arrives
         changed = true
         console.warn(
-          `[TemplateStore] No steps available for product ${productId} — marked as stale.`
+          `[TemplateStore] Step idx=${chart.stepIndex} not found in ${newSteps.length} new steps for product ${productId} — marked as stale`
         )
         return { ...chart, stale: true }
       })

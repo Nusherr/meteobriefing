@@ -3,9 +3,9 @@ import { useAuthStore } from '../stores/auth.store'
 import { useTemplateStore } from '../stores/template.store'
 import { SearchBlock } from '../components/composer/SearchBlock'
 import { SlideColumn } from '../components/composer/SlideColumn'
-import type { BriefingDefinition, ResolvedChart, TimeStep } from '@shared/types'
+import type { BriefingDefinition, ResolvedChart } from '@shared/types'
 
-type GenPhase = 'idle' | 'saving' | 'choosing-path' | 'refreshing' | 'downloading' | 'composing' | 'done' | 'error'
+type GenPhase = 'idle' | 'saving' | 'choosing-path' | 'downloading' | 'composing' | 'done' | 'error'
 
 export function ProductBrowserPage() {
   const { isLoggedIn } = useAuthStore()
@@ -33,6 +33,10 @@ export function ProductBrowserPage() {
   const [genMessage, setGenMessage] = useState('')
   const [genError, setGenError] = useState('')
 
+  // Track when loading just completed (for "Caricamento completato" message)
+  const [justLoaded, setJustLoaded] = useState(false)
+  const prevStepsLoadingRef = useRef(true)
+
   const generatePpt = useCallback(async () => {
     if (!activeTemplate) return
 
@@ -53,48 +57,11 @@ export function ProductBrowserPage() {
         return
       }
 
-      // 3. Refresh all products to get fresh image URLs
-      setGenPhase('refreshing')
-      setGenMessage('Aggiornamento carte...')
-
-      const { updateChartUrls } = useTemplateStore.getState()
-
-      // Collect unique products (by productId + productType)
-      const productsToRefresh = new Map<string, { productId: string; productType: string }>()
-      for (const slide of slides) {
-        for (const chart of slide.charts) {
-          if (!productsToRefresh.has(chart.productId)) {
-            productsToRefresh.set(chart.productId, {
-              productId: chart.productId,
-              productType: chart.productType
-            })
-          }
-        }
-      }
-
-      // Refresh each product using fetchChartUrlsForPpt (lightweight: only ensures product type
-      // is set without full catalog reload, then fetches fresh chart URLs)
-      // Only update imageUrls — don't touch labels or stale state
-      for (const [, product] of productsToRefresh) {
-        try {
-          setGenMessage(`Aggiornamento ${product.productId}...`)
-          const result = await window.electronAPI.prometeo.fetchChartUrlsForPpt(
-            product.productType,
-            product.productId
-          )
-          const steps = (result.steps || []) as TimeStep[]
-          const stepData = steps.map((s: TimeStep) => ({ label: s.label, index: s.index, imageUrl: s.imageUrl }))
-          updateChartUrls(product.productId, stepData)
-        } catch (err) {
-          console.warn(`[GeneratePPT] Failed to refresh product ${product.productId}:`, err)
-        }
-      }
-
-      // 4. Re-read slides from store (now with updated imageUrls)
-      const freshSlides = useTemplateStore.getState().slides
-
+      // 3. Download images directly (URLs are already up-to-date from step selection)
       setGenPhase('downloading')
       setGenMessage('Download immagini...')
+
+      const freshSlides = slides
 
       const allCharts: { slideId: string; slotId: string; imageUrl: string; title: string }[] = []
       for (const slide of freshSlides) {
@@ -246,6 +213,29 @@ export function ProductBrowserPage() {
 
   const totalCharts = slides.reduce((sum, s) => sum + s.charts.length, 0)
   const staleCharts = slides.reduce((sum, s) => sum + s.charts.filter((c) => c.stale).length, 0)
+  const chartsWithoutUrl = slides.reduce((sum, s) => sum + s.charts.filter((c) => !c.imageUrl).length, 0)
+
+  // Check if any search block with a locked product still has empty steps (not yet loaded)
+  const stepsStillLoading = searchBlocks.some(
+    (b) => b.lockedProduct && b.lockedProduct.steps.length === 0
+  )
+
+  // Detect when loading transitions from true → false (just finished loading)
+  useEffect(() => {
+    if (prevStepsLoadingRef.current && !stepsStillLoading && totalCharts > 0) {
+      setJustLoaded(true)
+      const timer = setTimeout(() => setJustLoaded(false), 3000)
+      return () => clearTimeout(timer)
+    }
+    prevStepsLoadingRef.current = stepsStillLoading
+  }, [stepsStillLoading, totalCharts])
+
+  // Collect all product IDs locked across search blocks (for duplicate prevention)
+  const lockedProductIds = new Set(
+    searchBlocks
+      .filter((b) => b.lockedProduct)
+      .map((b) => b.lockedProduct!.productId)
+  )
   const isGenerating = genPhase !== 'idle' && genPhase !== 'done' && genPhase !== 'error'
 
   // Unfocus search blocks when clicking anywhere outside a search block
@@ -326,6 +316,7 @@ export function ProductBrowserPage() {
                   canRemove={searchBlocks.length > 1}
                   isFocused={focusedBlockId === block.id}
                   onFocus={() => setFocusedBlockId(block.id)}
+                  lockedProductIds={lockedProductIds}
                 />
               </div>
             ))}
@@ -388,32 +379,60 @@ export function ProductBrowserPage() {
                     </p>
                   </div>
                 )}
-                <button
-                  onClick={generatePpt}
-                  disabled={totalCharts === 0 || staleCharts > 0}
-                  className={`w-full py-2.5 rounded-xl text-sm font-semibold transition-all cursor-pointer flex items-center justify-center gap-2 shadow-sm ${
-                    totalCharts > 0 && staleCharts === 0
-                      ? 'bg-blue-600 hover:bg-blue-700 text-white'
-                      : 'bg-slate-100 text-slate-300 cursor-not-allowed shadow-none'
-                  }`}
-                  title={
-                    totalCharts === 0
-                      ? 'Assegna almeno una carta a una slide'
-                      : staleCharts > 0
-                        ? `${staleCharts} carte non disponibili — rimuovi o sostituisci`
-                        : `Genera PPT con ${totalCharts} carte`
+                {(() => {
+                  const isLoading = stepsStillLoading || chartsWithoutUrl > 0
+                  const canGenerate = totalCharts > 0 && staleCharts === 0 && !isLoading
+
+                  if (isLoading) {
+                    return (
+                      <div className="w-full py-3 rounded-xl bg-slate-100 flex flex-col items-center justify-center gap-1 shadow-sm">
+                        <div className="flex items-center gap-2">
+                          <span className="w-4 h-4 border-2 border-slate-300 border-t-blue-500 rounded-full animate-spin" />
+                          <span className="text-sm font-semibold text-slate-400">Caricamento Carte</span>
+                        </div>
+                      </div>
+                    )
                   }
-                >
-                  <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                    <path strokeLinecap="round" strokeLinejoin="round" d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5M16.5 12L12 16.5m0 0L7.5 12m4.5 4.5V3" />
-                  </svg>
-                  Genera PPT
-                  {totalCharts > 0 && (
-                    <span className="bg-white/20 text-[10px] px-1.5 py-0.5 rounded-full">
-                      {totalCharts} carte
-                    </span>
-                  )}
-                </button>
+
+                  return (
+                    <button
+                      onClick={generatePpt}
+                      disabled={!canGenerate}
+                      className={`w-full py-3 rounded-xl font-semibold transition-all cursor-pointer flex flex-col items-center justify-center shadow-sm ${
+                        canGenerate
+                          ? 'bg-blue-600 hover:bg-blue-700 text-white'
+                          : 'bg-slate-100 text-slate-300 cursor-not-allowed shadow-none'
+                      }`}
+                      title={
+                        totalCharts === 0
+                          ? 'Assegna almeno una carta a una slide'
+                          : staleCharts > 0
+                            ? `${staleCharts} carte non disponibili — rimuovi o sostituisci`
+                            : `Genera PPT con ${totalCharts} carte`
+                      }
+                    >
+                      <div className="flex items-center gap-2">
+                        <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                          <path strokeLinecap="round" strokeLinejoin="round" d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5M16.5 12L12 16.5m0 0L7.5 12m4.5 4.5V3" />
+                        </svg>
+                        <span className="text-sm">Genera PPT</span>
+                        {totalCharts > 0 && (
+                          <span className={`text-[10px] px-1.5 py-0.5 rounded-full ${canGenerate ? 'bg-white/20' : ''}`}>
+                            {totalCharts} carte
+                          </span>
+                        )}
+                      </div>
+                      {justLoaded && canGenerate && (
+                        <span className="text-[10px] font-normal opacity-80 flex items-center gap-1 mt-0.5">
+                          <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                            <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
+                          </svg>
+                          Caricamento completato
+                        </span>
+                      )}
+                    </button>
+                  )
+                })()}
               </>
             )}
           </div>

@@ -186,9 +186,9 @@ export function TopBar() {
   const { activeTemplate, isDirty, saveActiveTemplate } = useTemplateStore()
 
   return (
-    <header className="h-12 bg-[var(--color-topbar-bg)] border-b border-slate-200 flex items-center justify-between px-5">
+    <header className="drag-region h-12 bg-[var(--color-topbar-bg)] border-b border-slate-200 flex items-center justify-between px-5">
       {/* Left: connection dot + clocks */}
-      <div className="flex items-center gap-3">
+      <div className="no-drag flex items-center gap-3">
         <span
           className={`w-2 h-2 rounded-full ${isLoggedIn ? 'bg-emerald-500' : 'bg-slate-300'}`}
           title={isLoggedIn ? 'Connesso a Prometeo' : 'Non connesso'}
@@ -197,7 +197,7 @@ export function TopBar() {
       </div>
 
       {/* Right: Save button + Template selector */}
-      <div className="flex items-center gap-2">
+      <div className="no-drag flex items-center gap-2">
         {/* Visible save button (always present when dirty) */}
         {activeTemplate && isDirty && (
           <button
