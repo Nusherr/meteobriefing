@@ -1,7 +1,7 @@
 import { app, BrowserWindow, shell, nativeImage, ipcMain } from 'electron'
 import { join } from 'path'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
-import { autoUpdater } from 'electron-updater'
+import https from 'https'
 import { registerAuthIpc } from './ipc/auth.ipc'
 import { registerPrometeoIpc } from './ipc/prometeo.ipc'
 import { registerTemplateIpc } from './ipc/template.ipc'
@@ -93,42 +93,63 @@ app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit()
 })
 
-// ── Auto-updater ──
+// ── Update checker via GitHub API ──
+// We don't use electron-updater because the app is unsigned and auto-install
+// won't work on macOS. Instead we check the latest GitHub release version
+// and let the user download manually.
+
+function fetchLatestVersion(): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const options = {
+      hostname: 'api.github.com',
+      path: '/repos/Nusherr/meteobriefing/releases/latest',
+      headers: { 'User-Agent': 'MeteoBriefing-Updater', Accept: 'application/vnd.github.v3+json' }
+    }
+    https.get(options, (res) => {
+      // Follow redirect if needed
+      if ((res.statusCode === 301 || res.statusCode === 302) && res.headers.location) {
+        https.get(res.headers.location, { headers: { 'User-Agent': 'MeteoBriefing-Updater' } }, (res2) => {
+          let data = ''
+          res2.on('data', (chunk) => { data += chunk })
+          res2.on('end', () => {
+            try { resolve(JSON.parse(data).tag_name?.replace('v', '') || '') }
+            catch { reject(new Error('Parse error')) }
+          })
+        }).on('error', reject)
+        return
+      }
+      if (res.statusCode !== 200) {
+        reject(new Error(`GitHub API returned ${res.statusCode}`))
+        return
+      }
+      let data = ''
+      res.on('data', (chunk) => { data += chunk })
+      res.on('end', () => {
+        try { resolve(JSON.parse(data).tag_name?.replace('v', '') || '') }
+        catch { reject(new Error('Parse error')) }
+      })
+    }).on('error', reject)
+  })
+}
+
 function setupAutoUpdater(): void {
-  // Don't check for updates in dev mode
   if (is.dev) return
 
-  // Don't auto-download: app is unsigned, so auto-install won't work on macOS.
-  // Instead, we notify the user and let them download manually from GitHub.
-  autoUpdater.autoDownload = false
-  autoUpdater.autoInstallOnAppQuit = false
-
-  autoUpdater.on('update-available', (info) => {
-    console.log('[Updater] Update available:', info.version)
-    mainWindow?.webContents.send('updater:status', {
-      status: 'available',
-      version: info.version
-    })
-  })
-
-  autoUpdater.on('update-not-available', () => {
-    console.log('[Updater] No update available')
-    mainWindow?.webContents.send('updater:status', {
-      status: 'up-to-date'
-    })
-  })
-
-  autoUpdater.on('error', (err) => {
-    console.error('[Updater] Error:', err.message)
-    mainWindow?.webContents.send('updater:status', {
-      status: 'error',
-      message: err.message
-    })
-  })
-
-  // Check for updates 3 seconds after launch, then every 60 minutes
-  setTimeout(() => autoUpdater.checkForUpdates(), 3000)
-  setInterval(() => autoUpdater.checkForUpdates(), 60 * 60 * 1000)
+  // Auto-check 5s after launch, then every 60 min (silent — only notifies if update found)
+  const autoCheck = async () => {
+    try {
+      const latest = await fetchLatestVersion()
+      const current = app.getVersion()
+      if (latest && latest !== current && latest > current) {
+        console.log('[Updater] Update available:', latest)
+        mainWindow?.webContents.send('updater:status', { status: 'available', version: latest })
+      }
+    } catch (err) {
+      console.error('[Updater] Auto-check error:', err instanceof Error ? err.message : err)
+    }
+  }
+  setTimeout(autoCheck, 5000)
+  setInterval(autoCheck, 60 * 60 * 1000)
 }
 
 // IPC: open GitHub releases page to download new version manually
@@ -140,13 +161,18 @@ ipcMain.handle('updater:open-download', () => {
 ipcMain.handle('updater:check', async () => {
   if (is.dev) return { status: 'dev' }
   try {
-    const result = await autoUpdater.checkForUpdates()
-    if (!result || !result.updateInfo) {
-      return { status: 'up-to-date' }
+    const latest = await fetchLatestVersion()
+    const current = app.getVersion()
+    if (latest && latest !== current && latest > current) {
+      mainWindow?.webContents.send('updater:status', { status: 'available', version: latest })
+      return { status: 'available', version: latest }
     }
-    return { status: 'checking' }
+    mainWindow?.webContents.send('updater:status', { status: 'up-to-date' })
+    return { status: 'up-to-date' }
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : 'Unknown error'
+    console.error('[Updater] Check error:', message)
+    mainWindow?.webContents.send('updater:status', { status: 'error', message })
     return { status: 'error', message }
   }
 })

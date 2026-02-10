@@ -46,7 +46,6 @@ export function Sidebar() {
             {isLoggedIn ? (username || 'Connesso') : 'Non connesso'}
           </span>
         </div>
-        <div className="text-[10px] text-slate-600 mt-1">v1.0.0</div>
       </div>
     </aside>
   )
